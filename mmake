@@ -1,0 +1,259 @@
+
+#!/bin/bash
+
+if [ "$1" = "" ]
+then
+  echo ''
+  echo 'usage:'
+  echo "  $0 <flags> [<option1> [<option2> ... ]] [-x /path/to/source/]"
+  echo ''
+  echo 'where:'
+  echo '  flags:'
+  echo '  -     - suppress help in case of empty parameters'
+  echo '  1     - build with 128 indices'
+  echo '  a     - build with ASAN'
+  echo '  c     - use clang (the only installed or named without number)'
+  echo '  c/NN/ - use clang-NN'
+  echo '  d     -  *NO* Debug build (defaul instead)'
+  echo '  e     - build embedded'
+  echo '  l     -  *NO* safemalloc'
+  echo '  m     - build with MSAN'
+  echo '  n     -  *NO* Ninja build (default instead)'
+  echo '  o     - build for old server (remove -s if used after it)'
+  echo '  p     - system Pcre (otherwise bundled)'
+  echo '  s     - system Ssl (otherwise bundled)'
+  echo '  u     - build with UBSAN'
+  echo '  v     - build for valgrind'
+  echo '  z     - system Zlib (otherwise bundled)'
+  echo '  3     - add s3 plugin'
+  echo '  C     - add Columnstore plugin'
+  echo '  M     - add Mroonga plugin'
+  echo '  O     - add cOnnect plugin'
+  echo '  R     - add Rocksdb plugin'
+  echo '  S     - add Spider plugin'
+  echo '  T     - add Tokudb plugin'
+  echo '  P     - add Perf Schema interface'
+  echo ''
+  exit 1
+fi
+
+# defaults
+
+MAX_INDEXES='64'
+WITH_ASAN='NO'
+CSET=''
+BUILD_TYPE='Debug'
+WITH_EMBEDDED_SERVER='NO'
+WSAFEMALLOC=''
+WITH_MSAN='NO'
+GENERATE='Ninja'
+OLD_BUILD=''
+WITH_PCRE='bundled'
+WITH_SSL='bundled'
+WITH_UBSAN='NO'
+WITH_VALGRIND='NO'
+WITH_ZLIB='bundled'
+PLUGIN_S3='NO'
+PLUGIN_COLUMNSTORE='NO'
+PLUGIN_MROONGA='NO'
+PLUGIN_CONNECT='NO'
+PLUGIN_ROCKSDB='NO'
+PLUGIN_SPIDER='NO'
+PLUGIN_TOKUDB='NO'
+PLUGIN_PERFSCHEMA='YES'
+
+FLAGS="$1"
+shift
+
+for (( i=0; i<${#FLAGS}; i++ ))
+do
+  FLAG="${FLAGS:$i:1}"
+  case $FLAG in
+    "-")
+      # do nothing used only to suppress help if no flags
+      ;;
+    1)
+      MAX_INDEXES='128'
+    ;;
+    a)
+      WITH_ASAN='YES'
+    ;;
+    c)
+      # check is there is explicit version)
+      ((N=$i+1))
+      CHAR="${FLAGS:$N:1}"
+      FOUND=0
+      if [ "$CHAR" = "/" ]
+      then
+        ((N++))
+        while [ N<$((counter+1)) ]
+        do
+          CHAR="${FLAGS:$N:1}"
+          case $CHAR in
+            1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 0)
+              ((FOUND=$FOUND*10+$CHAR))
+              ;;
+            "/")
+              break
+              ;;
+            *)
+              echo "incorrect flag '${FLAG}'"
+              exit 1
+              ;;
+          esac
+          ((N++))
+        done
+        if [ "FOUND" = "0" ]
+        then
+          echo "incorrect flag '${FLAG}'"
+          exit 1
+        fi
+        i=$N
+        export CC="clang-${FOUND}"
+        export CXX="clang++-${FOUND}"
+      else
+        # Tri to figureout name of compiler
+        if which clang++ &>1 >/dev/null
+        then
+          # named without version
+          export CC="clang"
+          export CXX="clang++"
+        else
+          # single version installed
+          CLANG_N=`/bin/ls -L /usr/bin/clang++-* |xargs basename|awk -e 'BEGIN { FS="-" } { print $2 }'`
+          export CC="clang-${CLANG_N}"
+          export CXX="clang++-${CLANG_N}"
+        fi
+      fi
+      echo "CC=${CC}"
+      echo "CXX=${CXX}"
+    ;;
+    d)
+      BUILD_TYPE=''
+    ;;
+    e)
+      WITH_EMBEDDED_SERVER='YES'
+    ;;
+    l)
+      WSAFEMALLOC=' -DWITH_SAFEMALLOC=OFF '
+    ;;
+    m)
+      WITH_MSAN='YES'
+    ;;
+    n)
+      GENERATE=''
+    ;;
+    o)
+      OLD_BUILD='-DCMAKE_CXX_FLAGS="-std=gnu++98" -DMYSQL_MAINTAINER_MODE=OFF -DDISABLE_LIBMYSQLCLIENT_SYMBOL_VERSIONING=TRUE'
+      WITH_SSL='bundled'
+    ;;
+    p)
+      WITH_PCRE='system'
+    ;;
+    s)
+      WITH_SSL='system'
+    ;;
+    u)
+      WITH_UBSAN='YES'
+    ;;
+    v)
+      WITH_VALGRIND='YES'
+    ;;
+    z)
+      WITH_ZLIB='system'
+    ;;
+    3)
+      PLUGIN_S3='YES'
+    ;;
+    C)
+      PLUGIN_COLUMNSTORE='YES'
+    ;;
+    M)
+      PLUGIN_MROONGA='YES'
+    ;;
+    O)
+      PLUGIN_CONNECT='YES'
+    ;;
+    R)
+      PLUGIN_ROCKSDB='YES'
+    ;;
+    S)
+      PLUGIN_SPIDER='YES'
+    ;;
+    T)
+      PLUGIN_TOKUDB='YES'
+    ;;
+    P)
+      PLUGIN_PERFSCHEMA='NO'
+    ;;
+    *)
+      echo "incorrect flag '${FLAG}'"
+      exit 1
+      ;;
+  esac
+done
+
+# Parse remaining
+EXTRA_CMAKE_ARGS=''
+while (("$#")); do
+  case "$1" in
+    -x)
+      if [ -n "$2" ] && [ ${2:0:1} != "-" ]; then
+        EXPLICIT_SOURCE="$2"
+        shift 2
+      else
+        echo "-x option requires a path"
+        exit 1
+      fi
+    ;;
+    *)
+      EXTRA_CMAKE_ARGS+=" \"$1\""
+      shift
+    ;;
+  esac
+done
+
+SOURCE_DIR=''
+if [ -n "${EXPLICIT_SOURCE}" ]; then
+  SOURCE_DIR="${EXPLICIT_SOURCE}"
+else
+  GIT_TOPLEVEL=$(git rev-parse --show-toplevel 2>/dev/null)
+  if [ -n "${GIT_TOPLEVEL}" ]; then
+    SOURCE_DIR="${GIT_TOPLEVEL}"
+  else
+    SOURCE_DIR="."
+  fi
+fi
+
+SOURCE_DIR=$(realpath "$SOURCE_DIR")
+
+if [ ! -d "$SOURCE_DIR" ]; then
+  echo ""
+  echo "${SOURCE_DIR} does not exist"
+  exit 1
+fi
+
+if ! (cd "$SOURCE_DIR" && git rev-parse --is-inside-work-tree &> /dev/null); then
+  echo ""
+  echo "${SOURCE_DIR} is not a git directory"
+  exit 1
+fi
+
+MYCMD='cmake'
+
+if [ "${GENERATE}" != '' ]
+then
+  MYCMD="${MYCMD} -G${GENERATE}"
+fi
+
+if [ "${BUILD_TYPE}" != '' ]
+then
+  MYCMD="${MYCMD} -DCMAKE_BUILD_TYPE=${BUILD_TYPE}"
+fi
+
+MYCMD="${CSET}${MYCMD} -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DMAX_INDEXES=${MAX_INDEXES} -DWITH_ASAN=${WITH_ASAN} -DWITH_EMBEDDED_SERVER=${WITH_EMBEDDED_SERVER} -DWITH_MSAN=${WITH_MSAN} -DWITH_PCRE=${WITH_PCRE} -DWITH_SSL=${WITH_SSL} -DWITH_UBSAN=${WITH_UBSAN} -DWITH_VALGRIND=${WITH_VALGRIND} -DWITH_ZLIB=${WITH_ZLIB} -DPLUGIN_S4=${PLUGIN_S3} -DPLUGIN_COLUMNSTORE=${PLUGIN_COLUMNSTORE} -DPLUGIN_MROONGA=${PLUGIN_MROONGA} -DPLUGIN_CONNECT=${PLUGIN_CONNECT} -DPLUGIN_ROCKSDB=${PLUGIN_ROCKSDB} -DPLUGIN_SPIDER=${PLUGIN_SPIDER} -DPLUGIN_TOKUDB=${PLUGIN_TOKUDB} -DPLUGIN_PERFSCHEMA=${PLUGIN_PERFSCHEMA} $WSAFEMALLOC $OLD_BUILD ${EXTRA_CMAKE_ARGS} ${SOURCE_DIR}"
+
+echo "${MYCMD}"
+
+eval "$MYCMD"
+cmake --build ./
